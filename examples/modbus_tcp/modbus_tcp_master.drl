@@ -1,0 +1,107 @@
+# ==============================================================================
+# Doosan Robotics DRL 예제 - Modbus TCP Master
+# ------------------------------------------------------------------------------
+# 로봇이 Modbus TCP Master(Client)가 되어 외부 슬레이브 장비
+# (PLC, I/O 모듈, 센서 게이트웨이 등)의 레지스터/코일을 읽고 쓰는 예제.
+#
+# [교육용 주의]
+#   - 아래 add_modbus_* / get_modbus_* / set_modbus_* 함수의 인자 구성과
+#     반환값은 컨트롤러 SW 버전(M/A/H 시리즈, DART-Platform)에 따라 다를 수
+#     있습니다. 사용 전 반드시 공식 프로그래밍 매뉴얼로 시그니처를 확인하세요.
+#   - IP/Port/슬레이브 주소는 실제 설비에 맞게 수정해야 합니다.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1) 접속 파라미터
+# ------------------------------------------------------------------------------
+SLAVE_IP    = "192.168.137.100"   # 슬레이브(PLC/IO) IP
+SLAVE_PORT  = 502                 # Modbus TCP 표준 포트
+SLAVE_ID    = 1                   # Unit ID (슬레이브 국번)
+
+# 등록할 Modbus 심볼 이름 (컨트롤러 내부 참조용 별칭)
+REG_START_BUTTON = "start_button"    # Discrete Input / Coil 예시
+REG_CONVEYOR_CMD = "conveyor_cmd"    # Coil (출력 명령)
+REG_PART_COUNT   = "part_count"      # Holding Register (읽기)
+REG_TARGET_POS   = "target_position" # Holding Register (쓰기)
+
+
+# ------------------------------------------------------------------------------
+# 2) Modbus 신호 등록
+# ------------------------------------------------------------------------------
+def setup_modbus_master():
+    tp_log("[Modbus] Master 신호 등록 시작")
+
+    # add_modbus_signal(name, ip, port, reg_type, addr, slave_id)
+    #   reg_type 예: DR_MODBUS_DIG_INPUT / DR_MODBUS_DIG_OUTPUT(coil)
+    #                DR_MODBUS_REG_INPUT / DR_MODBUS_REG_OUTPUT(holding)
+    add_modbus_signal(REG_START_BUTTON, SLAVE_IP, SLAVE_PORT,
+                      DR_MODBUS_DIG_INPUT, 0, SLAVE_ID)
+    add_modbus_signal(REG_CONVEYOR_CMD, SLAVE_IP, SLAVE_PORT,
+                      DR_MODBUS_DIG_OUTPUT, 0, SLAVE_ID)
+    add_modbus_signal(REG_PART_COUNT, SLAVE_IP, SLAVE_PORT,
+                      DR_MODBUS_REG_INPUT, 100, SLAVE_ID)
+    add_modbus_signal(REG_TARGET_POS, SLAVE_IP, SLAVE_PORT,
+                      DR_MODBUS_REG_OUTPUT, 200, SLAVE_ID)
+
+    tp_log("[Modbus] Master 신호 등록 완료")
+
+
+# ------------------------------------------------------------------------------
+# 3) 읽기 / 쓰기 헬퍼
+# ------------------------------------------------------------------------------
+def read_bit(name):
+    # 디지털(코일/입력) 1비트 읽기
+    val = get_modbus_signal(name)
+    tp_log("[Modbus] READ  " + name + " = " + str(val))
+    return val
+
+def read_word(name):
+    # 홀딩/입력 레지스터 16비트 읽기
+    val = get_modbus_signal(name)
+    tp_log("[Modbus] READ  " + name + " = " + str(val))
+    return val
+
+def write_bit(name, value):
+    # 코일 출력 (0/1)
+    set_modbus_signal(name, value)
+    tp_log("[Modbus] WRITE " + name + " <- " + str(value))
+
+def write_word(name, value):
+    # 홀딩 레지스터 쓰기 (0~65535)
+    set_modbus_signal(name, value)
+    tp_log("[Modbus] WRITE " + name + " <- " + str(value))
+
+
+# ------------------------------------------------------------------------------
+# 4) 메인 시퀀스
+#    "외부 시작 버튼 대기 -> 목표값 전달 -> 생산 카운트 폴링" 예시
+# ------------------------------------------------------------------------------
+def main():
+    setup_modbus_master()
+
+    # 4-1) 외부 시작 신호(Discrete Input) 폴링
+    tp_log("[Modbus] 외부 시작 버튼 대기 중...")
+    while read_bit(REG_START_BUTTON) == 0:
+        wait(0.1)
+    tp_log("[Modbus] 시작 신호 수신")
+
+    # 4-2) 컨베이어 가동 명령 (Coil ON)
+    write_bit(REG_CONVEYOR_CMD, ON)
+
+    # 4-3) 목표 위치값 슬레이브로 전달 (Holding Register)
+    target = 1500          # 예: 목표 위치(mm*10) 또는 레시피 번호
+    write_word(REG_TARGET_POS, target)
+
+    # 4-4) 생산 카운트 모니터링 (10개 도달 시 종료)
+    count = 0
+    while count < 10:
+        count = read_word(REG_PART_COUNT)
+        tp_log("[Modbus] 현재 생산 수량 = " + str(count))
+        wait(0.5)
+
+    # 4-5) 컨베이어 정지 (Coil OFF)
+    write_bit(REG_CONVEYOR_CMD, OFF)
+    tp_log("[Modbus] 시퀀스 완료 - 컨베이어 정지")
+
+
+main()

@@ -1,0 +1,126 @@
+# ==============================================================================
+# Doosan Robotics DRL 예제 - TCP/IP Socket Server
+# ------------------------------------------------------------------------------
+# 로봇이 서버가 되어 외부 클라이언트(상위 PC/HMI)의 접속을 받고, 명령을
+# 수신하여 동작한 뒤 결과를 회신하는 예제.
+#
+# [교육용 주의]
+#   - server_socket_open / server_socket_read / server_socket_write 의
+#     시그니처, 반환 형식, 접속 대기(blocking) 동작은 SW 버전별로 다릅니다.
+#     반드시 공식 매뉴얼로 확인하세요.
+#   - 서버 IP는 로봇 컨트롤러 자신의 IP이며, Port만 지정하는 경우가 많습니다.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1) 서버 파라미터
+# ------------------------------------------------------------------------------
+LISTEN_PORT = 20002        # 클라이언트가 접속할 포트
+
+# 프로토콜 규약(교육용):
+#   수신 명령:
+#     "HOME\n"                  -> 홈 위치 이동
+#     "MOVE,x,y,z,rx,ry,rz\n"   -> 지정 좌표로 이동
+#     "STATE\n"                 -> 현재 상태 요청
+#     "QUIT\n"                  -> 서버 종료
+#   회신:
+#     "OK\n" / "STATE,x,y,z,...\n" / "ERR,<사유>\n"
+
+
+# ------------------------------------------------------------------------------
+# 2) 서버 소켓 열기 (클라이언트 접속 대기)
+# ------------------------------------------------------------------------------
+def open_server():
+    tp_log("[SockServer] 포트 " + str(LISTEN_PORT) + " 리슨 시작")
+
+    # server_socket_open(port) -> socket handle
+    sock = server_socket_open(LISTEN_PORT)
+    if sock < 0:
+        tp_log("[SockServer] 서버 소켓 열기 실패")
+        raise Exception("server socket open failed")
+
+    tp_log("[SockServer] 클라이언트 접속 대기 중... handle=" + str(sock))
+    return sock
+
+
+# ------------------------------------------------------------------------------
+# 3) 송수신 헬퍼
+# ------------------------------------------------------------------------------
+def recv_line(sock, timeout=30.0):
+    # server_socket_read(sock, length, timeout) -> (res, rx_data)
+    res, data = server_socket_read(sock, -1, timeout)
+    if res <= 0:
+        return ""
+    line = str(data)
+    tp_log("[SockServer] RX: " + line)
+    return line
+
+def send_line(sock, text):
+    server_socket_write(sock, text + "\n")
+    tp_log("[SockServer] TX: " + text)
+
+
+# ------------------------------------------------------------------------------
+# 4) 명령 처리기
+# ------------------------------------------------------------------------------
+POS_HOME = posj(0, 0, 90, 0, 90, 0)
+
+def handle_command(sock, line):
+    tokens = line.split(",")
+    cmd = tokens[0]
+
+    if cmd == "HOME":
+        movej(POS_HOME, v=40, a=40)
+        send_line(sock, "OK")
+
+    elif cmd == "MOVE":
+        if len(tokens) < 7:
+            send_line(sock, "ERR,BAD_FORMAT")
+            return True
+        x  = float(tokens[1])
+        y  = float(tokens[2])
+        z  = float(tokens[3])
+        rx = float(tokens[4])
+        ry = float(tokens[5])
+        rz = float(tokens[6])
+        target = posx(x, y, z, rx, ry, rz)
+        movel(target, v=150, a=150)
+        send_line(sock, "OK")
+
+    elif cmd == "STATE":
+        cur = get_current_posx()      # 현재 TCP 좌표
+        p = cur[0] if type(cur) == list else cur
+        reply = ("STATE," + str(DR_ROUND(p[0])) + "," + str(DR_ROUND(p[1])) +
+                 "," + str(DR_ROUND(p[2])) + "," + str(DR_ROUND(p[3])) +
+                 "," + str(DR_ROUND(p[4])) + "," + str(DR_ROUND(p[5])))
+        send_line(sock, reply)
+
+    elif cmd == "QUIT":
+        send_line(sock, "OK")
+        return False              # 루프 종료 신호
+
+    else:
+        send_line(sock, "ERR,UNKNOWN_CMD")
+
+    return True                   # 루프 계속
+
+
+# ------------------------------------------------------------------------------
+# 5) 메인 루프
+# ------------------------------------------------------------------------------
+def main():
+    sock = open_server()
+    movej(POS_HOME, v=40, a=40)
+
+    running = True
+    while running:
+        line = recv_line(sock, 30.0)
+        if line == "":
+            tp_log("[SockServer] 수신 없음(타임아웃) - 계속 대기")
+            continue
+        running = handle_command(sock, line)
+
+    server_socket_close(sock)
+    tp_log("[SockServer] 서버 종료")
+
+
+main()

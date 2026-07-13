@@ -1,0 +1,121 @@
+# ==============================================================================
+# Doosan Robotics DRL 예제 - TCP/IP Socket Client
+# ------------------------------------------------------------------------------
+# 로봇이 클라이언트가 되어 외부 서버(비전 시스템, 상위 제어 PC 등)에 접속하고
+# 문자열 명령/좌표 데이터를 주고받는 예제.
+#
+# [교육용 주의]
+#   - client_socket_open / client_socket_write / client_socket_read 의 인자
+#     및 반환값 형식(bytes/list/string)은 컨트롤러 SW 버전에 따라 다릅니다.
+#     반드시 공식 매뉴얼로 확인 후 파싱 로직을 맞추세요.
+#   - 아래 프로토콜(콤마 구분 문자열)은 교육용 임의 규약입니다.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1) 서버 접속 정보
+# ------------------------------------------------------------------------------
+SERVER_IP   = "192.168.137.50"    # 외부 서버(비전 PC 등) IP
+SERVER_PORT = 20002               # 임의 애플리케이션 포트
+
+# 프로토콜 규약(교육용):
+#   요청  : "REQ,POSE\n"                -> 서버에 물체 좌표 요청
+#   응답  : "POSE,x,y,z,rx,ry,rz\n"     -> 서버가 좌표 회신
+#   완료  : "DONE\n"                    -> 로봇이 작업 완료 통보
+
+
+# ------------------------------------------------------------------------------
+# 2) 소켓 열기
+# ------------------------------------------------------------------------------
+def open_client():
+    tp_log("[SockClient] 서버 접속 시도: " + SERVER_IP + ":" + str(SERVER_PORT))
+
+    # client_socket_open(ip, port) -> socket handle (>=0 정상)
+    sock = client_socket_open(SERVER_IP, SERVER_PORT)
+    if sock < 0:
+        tp_log("[SockClient] 접속 실패")
+        raise Exception("socket open failed")
+
+    tp_log("[SockClient] 접속 성공, handle=" + str(sock))
+    return sock
+
+
+# ------------------------------------------------------------------------------
+# 3) 문자열 송신 / 수신
+# ------------------------------------------------------------------------------
+def send_line(sock, text):
+    msg = text + "\n"
+    client_socket_write(sock, msg)
+    tp_log("[SockClient] TX: " + text)
+
+def recv_line(sock, timeout=5.0):
+    # client_socket_read(sock, length, timeout) -> (res, rx_data)
+    res, data = client_socket_read(sock, -1, timeout)
+    if res <= 0:
+        tp_log("[SockClient] 수신 실패/타임아웃")
+        return ""
+    # data가 bytes/list일 경우 문자열로 변환 (버전별 상이 -> 매뉴얼 확인)
+    line = str(data)
+    tp_log("[SockClient] RX: " + line)
+    return line
+
+
+# ------------------------------------------------------------------------------
+# 4) 응답 문자열 파싱  "POSE,x,y,z,rx,ry,rz"
+# ------------------------------------------------------------------------------
+def parse_pose(line):
+    tokens = line.split(",")
+    if len(tokens) < 7:
+        tp_log("[SockClient] 잘못된 응답 포맷")
+        return None
+    if tokens[0] != "POSE":
+        tp_log("[SockClient] 예상치 못한 헤더: " + tokens[0])
+        return None
+
+    x  = float(tokens[1])
+    y  = float(tokens[2])
+    z  = float(tokens[3])
+    rx = float(tokens[4])
+    ry = float(tokens[5])
+    rz = float(tokens[6])
+    return posx(x, y, z, rx, ry, rz)
+
+
+# ------------------------------------------------------------------------------
+# 5) 메인 시퀀스
+#    "좌표 요청 -> 수신 -> 이동 -> 완료 통보" 반복
+# ------------------------------------------------------------------------------
+POS_STANDBY = posj(0, 0, 90, 0, 90, 0)
+
+def main():
+    sock = open_client()
+    movej(POS_STANDBY, v=40, a=40)
+
+    for i in range(3):           # 교육용: 3회 반복
+        tp_log("[SockClient] === 작업 " + str(i + 1) + " ===")
+
+        # 5-1) 서버에 물체 좌표 요청
+        send_line(sock, "REQ,POSE")
+
+        # 5-2) 응답 수신 및 파싱
+        line = recv_line(sock, 5.0)
+        target = parse_pose(line)
+        if target == None:
+            continue
+
+        # 5-3) 목표 위치로 이동 (접근 -> 작업 -> 복귀)
+        approach = trans(target, posx(0, 0, 100, 0, 0, 0))  # +Z 100mm 위
+        movel(approach, v=200, a=200)
+        movel(target,   v=100, a=100)
+        wait(0.3)                # 파지/작업 대기
+        movel(approach, v=200, a=200)
+
+        # 5-4) 완료 통보
+        send_line(sock, "DONE")
+        movej(POS_STANDBY, v=40, a=40)
+
+    # 5-5) 소켓 닫기
+    client_socket_close(sock)
+    tp_log("[SockClient] 종료")
+
+
+main()
