@@ -1,0 +1,64 @@
+### Robot : Client(Master) ###
+### PC    : Server(Salve)  ###
+
+
+# ---------------- 0. home position ----------------
+set_velj(60.0)
+set_accj(100.0)
+set_velx(250.0)
+set_accx(1000.0)
+movej([0,0,90,0,90,0])
+
+p2 = posx(
+    Global_p1[0],
+    Global_p1[1],
+    Global_p1[2]+100,
+    Global_p1[3],
+    Global_p1[4],
+    Global_p1[5],
+)
+
+
+
+
+
+
+
+# ---------------- 1. Socket connect ----------------
+ip = "192.168.137.51" #PC IP Address (only cilent)
+port = 200
+sock = client_socket_open(ip, port)
+# sock = server_socket_open(port)
+
+
+
+# ---------------- 2. Generate msg ----------------
+msg="example: Enter the target number (1,2,3) "+"\r\n"
+msg=msg.encode()
+
+# ---------------- 3. Send msg to compute ----------------
+tp_popup("1-1) send msg ???")
+client_socket_write(sock,msg)
+# server_socket_write(sock,msg)
+tp_popup("1-2) send complete!!!")
+
+
+
+# ---------------- 4. Receive data from computer ----------------
+tp_popup("2-1) receive wait...")
+data=client_socket_read(sock)
+# data=server_socket_read(sock)
+tp_popup("2-2) receive complete !!!")
+
+
+
+# ---------------- 5. move ----------------
+rx_data=data[1].decode().replace('\r\n', '') # byte --> string / remove '\r\n'
+rx_data_split=rx_data.split(',')
+rx_data_num = [float(x) for x in rx_data_split]
+
+tp_popup("{}".format(rx_data_num))
+
+movel(rx_data_num)
+
+movej([0,0,90,0,90,0])
